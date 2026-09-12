@@ -1,10 +1,6 @@
-
 # gj_json
 
-## Supported file types
-a simple JSON parser
-
-## Output format
+A simple JSON parser.
 
 ## Build
 ```bash
@@ -16,6 +12,19 @@ make
 #include "gj_json/gj_json.h"
 
 int main() {
-    return 0;
+    struct JSON json;
+    int res = gj_json_parse( "test.json", &json);
+
+    if (res)
+        return res;
+
+    // Example queries
+    gj_print_json(&json);
+    struct json_value val = gj_json_get(&json, "name");
+
+    // Cleanup
+    gj_json_free(&json);
+
+    return res;
 }
 ```
