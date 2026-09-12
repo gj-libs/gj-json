@@ -16,7 +16,7 @@ TEST_SRC = $(TEST_DIR)/test.c
 TEST_BIN = test
 
 # Output library
-NAME = $(BUILD_DIR)/libgj_json.a
+NAME = libgj_json.a
 
 # Find all source files (internal only)
 SRC_C   = $(shell find $(SRC_DIR) -name "*.c")
