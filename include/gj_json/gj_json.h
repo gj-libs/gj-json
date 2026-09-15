@@ -7,6 +7,7 @@
 #ifndef GJ_JSON_H
 #define GJ_JSON_H
 
+#include <stddef.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -31,8 +32,8 @@ struct json_float {
 };
 
 struct json_str {
-    int start;
-    int length;
+    size_t start;
+    size_t length;
 };
 
 struct json_bool {
