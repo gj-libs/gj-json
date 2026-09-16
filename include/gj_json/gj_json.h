@@ -81,7 +81,6 @@ struct JSON {
     char *buffer;
 };
 
-
 /*
  *
  */

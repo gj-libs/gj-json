@@ -7,6 +7,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#define INVALID \
+    (struct json_value){.json_type = TYPE_INVALID}
+
 #define VALIDATE_AT(ps, p, ret) \
     if (p >= ps->size) \
         return ret;
@@ -113,56 +116,59 @@ void skip_whitespaces(struct parse_state *ps) {
 }
 
 struct json_value parse_string(struct parse_state *ps) {
-    struct json_value jv = {.json_type = TYPE_INVALID};
     if (READ(ps) != '"')
-        return jv;
+        return INVALID;
 
-    ADVANCE(ps, 1, jv); // consume opening quote
+    ADVANCE(ps, 1, INVALID); // consume opening quote
     size_t start = ps->i;
     size_t len = 0;
 
     char c = READ(ps); 
     while (c != '"') {
-        ADVANCE(ps, 1, jv);
+        ADVANCE(ps, 1, INVALID);
         c = READ(ps);
     }
 
     len = ps->i - start;
 
-    ADVANCE(ps, 1, jv); // consume closing quote
+    ADVANCE(ps, 1, INVALID); // consume closing quote
 
-    jv.json_type = TYPE_STRING;
-    jv.data.string.start = start;
-    jv.data.string.length = len;
+    struct json_value jv = {
+        .json_type = TYPE_STRING,
+        .data.string.start = start,
+        .data.string.length = len
+    };
 
     return jv;
 }
 
 struct json_value parse_number(struct parse_state *ps) {
     // TODO: check the length of the number to be less than 32/64 bits
-    struct json_value jv = {.json_type = TYPE_INVALID};
-
     size_t start = ps->i;
     char c = READ(ps);
 
+    int multiplier = 1;
+
     if (c == '-') {
-        ADVANCE(ps, 1, jv);
+        ADVANCE(ps, 1, INVALID);
         c = READ(ps);
+        multiplier = -1;
     }
 
     while (c >= '0' && c <= '9') {
-        ADVANCE(ps, 1, jv);
+        ADVANCE(ps, 1, INVALID);
         c = READ(ps);
     }
 
+    struct json_value jv = INVALID;
     if (c == '.') {
         jv.json_type = TYPE_FLOAT;
 
-        ADVANCE(ps, 1, jv);
+        ADVANCE(ps, 1, INVALID);
         c = READ(ps);
 
         while (c >= '0' && c <= '9') {
-            ADVANCE(ps, 1, jv);
+            ADVANCE(ps, 1, INVALID);
             c = READ(ps);
         }
 
@@ -171,15 +177,9 @@ struct json_value parse_number(struct parse_state *ps) {
         jv.json_type = TYPE_INT;
 
         int value = 0;
-        int multiplier = 1;
-
-        VALIDATE_AT(ps, start, jv);
-        if (ps->s[start] == '-') {
-            multiplier = -1;
+        if (multiplier == -1)
             start++;
-        }
-
-        VALIDATE_AT(ps, ps->i, jv);
+        VALIDATE_AT(ps, ps->i, INVALID);
         for (size_t i = start; i < ps->i; i++) {
             value = value * 10 + (ps->s[i] - '0');
         }
@@ -193,24 +193,24 @@ struct json_value parse_number(struct parse_state *ps) {
     if (c == ',' || c == '}' || c == ']')
         return jv;
 
-    return (struct json_value){.json_type = TYPE_INVALID};
+    return INVALID;
 }
 
 struct json_value parse_bool_null(struct parse_state *ps) {
-    struct json_value jv = {.json_type = TYPE_INVALID};
+    struct json_value jv = INVALID;
     // TODO: check overflow for strncmp
     if (strncmp(&READ(ps), "true", 4) == 0) {
         jv.json_type = TYPE_BOOL;
         jv.data.boolean.value = 1;
-        ADVANCE(ps, 4, (struct json_value){.json_type = TYPE_INVALID})
+        ADVANCE(ps, 4, INVALID);
     } else if (strncmp(&READ(ps), "false", 5) == 0) {
         jv.json_type = TYPE_BOOL;
         jv.data.boolean.value = 0;
-        ADVANCE(ps, 5, (struct json_value){.json_type = TYPE_INVALID})
+        ADVANCE(ps, 5, INVALID);
     } else if (strncmp(&READ(ps), "null", 4) == 0) {
         jv.json_type = TYPE_NULL;
         jv.data.null.value = 0;
-        ADVANCE(ps, 4, (struct json_value){.json_type = TYPE_INVALID})
+        ADVANCE(ps, 4, INVALID);
     }
     return jv;
 }
@@ -244,7 +244,7 @@ int parse_array(struct parse_state *ps, struct json_array *arr) {
 }
 
 struct json_value parse_value(struct parse_state *ps) {
-    struct json_value jv = {.json_type = TYPE_INVALID};
+    struct json_value jv = INVALID;
     char c = READ(ps);
     if (c == '"') {
         return parse_string(ps);
@@ -257,12 +257,13 @@ struct json_value parse_value(struct parse_state *ps) {
         jv.data.object.num_kv_pairs = 0;
         jv.data.object.kv_pairs = NULL;
         if (parse_object(ps, &jv.data.object))
-            return jv;
+            return INVALID;
     } else if (c == '[') {
         jv.json_type = TYPE_ARRAY;
         jv.data.array.num_elements = 0;
         jv.data.array.elements = NULL;
-        parse_array(ps, &jv.data.array);
+        if (parse_array(ps, &jv.data.array))
+            return INVALID;
     }
     return jv;
 }
@@ -273,7 +274,12 @@ int parse_kv_pair(struct parse_state *ps, struct json_object *obj) {
     struct json_value jv = parse_string(ps);
     if (jv.json_type != TYPE_STRING)
         return -1;
-    struct json_key jk = {.key = {.start = jv.data.string.start, .length = jv.data.string.length}};
+    struct json_key jk = {
+        .key = {
+            .start = jv.data.string.start,
+            .length = jv.data.string.length
+        }
+    };
 
     skip_whitespaces(ps);
 
@@ -310,46 +316,172 @@ int parse_object(struct parse_state *ps, struct json_object *obj) {
     return 0;
 }
 
-void gj_json_free(struct JSON *json) {
-    for (int i = 0; i < json->root.num_kv_pairs; i++) {
-        struct json_value *jv = &json->root.kv_pairs[i];
-        if (jv->json_type == TYPE_OBJECT) {
-            struct JSON nested_json = {jv->data.object, NULL};
-            gj_json_free(&nested_json);
-        } else if (jv->json_type == TYPE_ARRAY) {
-            for (int j = 0; j < jv->data.array.num_elements; j++) {
-                struct json_value *elem = &jv->data.array.elements[j];
-                if (elem->json_type == TYPE_OBJECT) {
-                    struct JSON nested_json = {elem->data.object, NULL};
-                    gj_json_free(&nested_json);
+int parse_index(struct parse_state *ps, int *num) {
+    char c = READ(ps);
+
+    if (c != '[')
+        return -1;
+    ADVANCE(ps, 1, -1);
+
+    size_t start = ps->i;
+    int multiplier = 1;
+    c = READ(ps);
+    if (c == '-') {
+        ADVANCE(ps, 1, -1);
+        c = READ(ps);
+        start++;
+        multiplier = -1;
+    }
+
+    while (c >= '0' && c <= '9') {
+        ADVANCE(ps, 1, -1);
+        c = READ(ps);
+    }
+
+    if (c != ']')
+        return -1;
+
+    *num = 0;
+
+    VALIDATE_AT(ps, ps->i-1, -1);
+    for (size_t i = start; i <= ps->i-1; i++) {
+        *num = *num * 10 + (ps->s[i] - '0');
+    }
+    *num *= multiplier;
+
+    return 0;
+}
+
+struct json_value *parse_keys(
+        const char *key,
+        int *num_keys) {
+    if (!key)
+        return NULL;
+
+    struct parse_state _ps = {
+        .size = strlen(key),
+        .i = 0,
+        .s = key
+    };
+    struct parse_state *ps = &_ps;
+    struct json_value *keys;
+    *num_keys = 0;
+
+    while (1) {
+        // valid
+        // key.key1[0]
+        // key.key1[0].key2
+        //
+        // invalid
+        // .key
+        // key.
+        // key..key1
+        // key.[0]
+
+        if (*num_keys == 0) {
+            (*num_keys)++;
+            keys = malloc(sizeof(struct json_value) * *num_keys);
+            keys[*num_keys - 1].data.string.start = 0;
+            keys[*num_keys - 1].data.string.length = 0;
+        } else {
+            (*num_keys)++;
+            keys = realloc(keys, sizeof(struct json_value) * *num_keys);
+            keys[*num_keys - 1].data.string.start = 0;
+            keys[*num_keys - 1].data.string.length = 0;
+        }
+
+        char c = ps->s[ps->i]; 
+        if (c == '[') {
+            int idx;
+            if (parse_index(ps, &idx)) {
+                free(keys);
+                return NULL;
+            }
+            keys[*num_keys - 1].json_type = TYPE_INT;
+            keys[*num_keys - 1].data.integer.value = idx;
+            ps->i++;
+            if (ps->i >= ps->size) {
+                return keys;
+            }
+        } else {
+            if (c == '.') {
+                ps->i++;
+                if (ps->i >= ps->size || ps->s[ps->i] == '.' || ps->s[ps->i] == '[') {
+                    free(keys);
+                    return NULL;
                 }
             }
-            free(jv->data.array.elements);
+            int start = ps->i;
+            int new_key = 0;
+            while (ps->i < ps->size) {
+                ps->i++;
+                c = ps->s[ps->i];
+                if (c == '.' || c == '[') {
+                    new_key = 1;
+                    break;
+                }
+            }
+            keys[*num_keys - 1].json_type = TYPE_STRING;
+            keys[*num_keys - 1].data.string.start = start;
+            keys[*num_keys - 1].data.string.length = ps->i - start;
+            if (!new_key)
+                return keys;
         }
     }
-    free(json->root.kv_pairs);
-    if (json->buffer) {
-        free(json->buffer);
-        json->buffer = NULL;
+
+    return NULL;
+}
+
+struct json_value get_value_by_key(
+        struct json_value *root,
+        struct json_value *key,
+        const char *data_buffer,
+        const char *key_buffer) {
+    if (root->json_type == TYPE_OBJECT && key->json_type == TYPE_STRING) {
+        struct json_object *obj = &root->data.object;
+        for (int i = 0; i < obj->num_kv_pairs; i++) {
+            struct json_value jv = obj->kv_pairs[i];
+            if (jv.key.key.length == key->data.string.length &&
+                    strncmp(
+                        &data_buffer[jv.key.key.start],
+                        &key_buffer[key->data.string.start],
+                        jv.key.key.length) == 0) {
+                return jv;
+            }
+        }
+    } else if (root->json_type == TYPE_ARRAY && key->json_type == TYPE_INT) {
+        int idx = key->data.integer.value;
+        if (idx >= root->data.array.num_elements)
+            return INVALID;
+        if (abs(idx) > root->data.array.num_elements)
+            return INVALID;
+        return root->data.array.elements[idx];
     }
+    return INVALID;
 }
 
 struct json_value gj_json_get(struct JSON *json, const char *key) {
-    for (int i = 0; i < json->root.num_kv_pairs; i++) {
-        struct json_value *jv = &json->root.kv_pairs[i];
-        if (jv->key.key.length == strlen(key) &&
-                strncmp(&json->buffer[jv->key.key.start], key, jv->key.key.length) == 0) {
-            return *jv;
-        }
-        if (jv->json_type == TYPE_OBJECT) {
-            struct JSON nested_json = {jv->data.object, json->buffer};
-            struct json_value nested_jv = gj_json_get(&nested_json, key);
-            if (nested_jv.json_type != TYPE_INVALID) {
-                return nested_jv;
-            }
-        }
+    int num_keys;
+    struct json_value *keys = parse_keys(key, &num_keys);
+    if (!keys)
+        return INVALID;
+    
+    for (int k = 0; k < num_keys; k++) {
+        if (keys[k].json_type == TYPE_INT)
+            printf("key[%d]: %d\n", k, keys[k].data.integer.value);
+        else if (keys[k].json_type == TYPE_STRING)
+            printf("key[%d]: %.*s\n", k, (int)keys[k].data.string.length, &key[keys[k].data.string.start]);
     }
-    return (struct json_value){.json_type = TYPE_INVALID};
+
+    struct json_value root = {.json_type = TYPE_OBJECT, .data = {.object = json->root}};
+    for (int k = 0; k < num_keys; k++) {
+        struct json_value res = get_value_by_key(&root, &keys[k], json->buffer, key);
+        if (res.json_type == TYPE_INVALID)
+            return INVALID;
+        root = res;
+    }
+
+    return root;
 }
 
 int gj_json_parse(const char *filename, struct JSON *json) {
